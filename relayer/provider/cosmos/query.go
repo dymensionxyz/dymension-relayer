@@ -698,13 +698,13 @@ func (cc *CosmosProvider) QueryPacketCommitments(ctx context.Context, height uin
 }
 
 // QueryPacketAcknowledgements returns an array of packet acks
-func (cc *CosmosProvider) QueryPacketAcknowledgements(ctx context.Context, height uint64, channelid, portid string, latestAckPageKey *[]byte) (acknowledgements []*chantypes.PacketState, err error) {
+func (cc *CosmosProvider) QueryPacketAcknowledgements(ctx context.Context, height uint64, channelid, portid string) (acknowledgements []*chantypes.PacketState, err error) {
 	qc := chantypes.NewQueryClient(cc)
 	ctxWithHeight := lens.SetHeightOnContext(ctx, int64(height))
 	total := []*chantypes.PacketState{}
+	pagination := DefaultPageRequest()
+
 	for {
-		pagination := DefaultPageRequest()
-		pagination.Key = *latestAckPageKey
 		res, err := qc.PacketAcknowledgements(ctxWithHeight, &chantypes.QueryPacketAcknowledgementsRequest{
 			PortId:     portid,
 			ChannelId:  channelid,
@@ -717,8 +717,8 @@ func (cc *CosmosProvider) QueryPacketAcknowledgements(ctx context.Context, heigh
 		if len(res.Pagination.NextKey) == 0 {
 			break
 		}
-		// update to the latest PageKey
-		*latestAckPageKey = res.Pagination.NextKey
+		pagination = DefaultPageRequest()
+		pagination.Key = res.Pagination.NextKey
 	}
 	return total, nil
 }

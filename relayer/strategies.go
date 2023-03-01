@@ -308,26 +308,15 @@ func relayUnrelayedPacketsAndAcks(ctx context.Context, log *zap.Logger, wg *sync
 		channels <- srcChannel
 	}()
 
-	var (
-		// relayUnrelayedAcks uses QueryPacketAcknowledgements method
-		// QueryPacketAcknowledgements retrieve all the acks that have
-		// been accepted at some point which can be thousands of thousands.
-		// Therefore, we need to query start from some point.
-		// We solve it by storing the latest sequence number and latest
-		// page key as returned from query and calculating what is the page to query.
-		latestSrcAckPageKey []byte
-		latestDstAckPageKey []byte
-	)
-
 	for {
-		if ok := relayUnrelayedPackets(ctx, log, src, dst, maxTxSize, maxMsgLength, memo, srcChannel.channel); !ok {
+		if ok := relayUnrelayedPackets(ctx, log, src, dst,
+			maxTxSize, maxMsgLength, memo,
+			srcChannel.channel); !ok {
 			return
 		}
 		if ok := relayUnrelayedAcks(ctx, log, src, dst,
 			maxTxSize, maxMsgLength, memo,
-			srcChannel.channel,
-			&latestSrcAckPageKey,
-			&latestDstAckPageKey); !ok {
+			srcChannel.channel); !ok {
 			return
 		}
 
@@ -440,8 +429,6 @@ func relayUnrelayedAcks(ctx context.Context,
 	log *zap.Logger, src, dst *Chain,
 	maxTxSize, maxMsgLength uint64, memo string,
 	srcChannel *types.IdentifiedChannel,
-	latestSrcAckPageKey *[]byte,
-	latestDstAckPageKey *[]byte,
 ) bool {
 
 	srch, dsth, err := QueryLatestHeights(ctx, src, dst)
@@ -459,19 +446,16 @@ func relayUnrelayedAcks(ctx context.Context,
 		srcErr = relayUnrelayedAcksHelper(ctx, log,
 			src, srcChannel.ChannelId, srcChannel.PortId, srch,
 			dst, srcChannel.Counterparty.ChannelId, srcChannel.Counterparty.PortId, dsth,
-			maxTxSize, maxMsgLength, memo,
-			latestSrcAckPageKey)
+			maxTxSize, maxMsgLength, memo)
 	}()
 	go func() {
 		defer wg.Done()
 		DstErr = relayUnrelayedAcksHelper(ctx, log,
 			dst, srcChannel.Counterparty.ChannelId, srcChannel.Counterparty.PortId, dsth,
 			src, srcChannel.ChannelId, srcChannel.PortId, srch,
-			maxTxSize, maxMsgLength, memo,
-			latestDstAckPageKey)
+			maxTxSize, maxMsgLength, memo)
 	}()
 	wg.Wait()
-
 	if srcErr != nil {
 		println(srcErr.Error())
 		return false
@@ -487,14 +471,11 @@ func relayUnrelayedAcksHelper(ctx context.Context, log *zap.Logger,
 	src *Chain, srcChannelId, srcPortId string, srch int64,
 	dst *Chain, dstChannelId, dstPortId string, dsth int64,
 	maxTxSize, maxMsgLength uint64, memo string,
-	latestAckPageKey *[]byte,
 ) error {
 	// we are quering the previous heights because later
 	// when we query tendermint proof, the proof is in the following  height
 	adjustedSrch := srch - 1
 	adjustedDsth := dsth - 1
-
-	latestAckPageKeyLocal := *latestAckPageKey
 
 	var err error = nil
 	var sequences []uint64
@@ -504,7 +485,6 @@ func relayUnrelayedAcksHelper(ctx context.Context, log *zap.Logger,
 	sequences, err = unrelayedAcknowledgements(ctx,
 		src, srcChannelId, srcPortId, adjustedSrch,
 		dst, dstChannelId, dstPortId, adjustedDsth,
-		&latestAckPageKeyLocal,
 	)
 
 	// If there are no unrelayed acks, stop early.
@@ -559,12 +539,7 @@ func relayUnrelayedAcksHelper(ctx context.Context, log *zap.Logger,
 		)
 	}
 
-	if err == nil {
-		// as long as relayUnrelayedAcks didn't return false, it means all acks that
-		// were queried by QueryPacketAcknowledgements relayed and the latest page key
-		// can move to next
-		*latestAckPageKey = latestAckPageKeyLocal
-	} else {
+	if err != nil {
 		log.Warn(
 			"unrelayedAcknowledgements failed",
 			zap.String("src_chain_id", src.ChainID()),
@@ -574,6 +549,5 @@ func relayUnrelayedAcksHelper(ctx context.Context, log *zap.Logger,
 			zap.Error(ctx.Err()),
 		)
 	}
-
 	return err
 }

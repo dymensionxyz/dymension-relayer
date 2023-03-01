@@ -152,7 +152,6 @@ func UnrelayedSequences(ctx context.Context, src, dst *Chain, srch, dsth int64, 
 func unrelayedAcknowledgements(ctx context.Context,
 	src *Chain, srcChannelId, srcPortId string, srch int64,
 	dst *Chain, dstChannelId, dstPortId string, dsth int64,
-	latestAckPageKey *[]byte,
 ) ([]uint64, error) {
 	var (
 		srcPacketSeq = []uint64{}
@@ -162,7 +161,7 @@ func unrelayedAcknowledgements(ctx context.Context,
 	)
 
 	if err = retry.Do(func() error {
-		res, err = src.ChainProvider.QueryPacketAcknowledgements(ctx, uint64(srch), srcChannelId, srcPortId, latestAckPageKey)
+		res, err = src.ChainProvider.QueryPacketAcknowledgements(ctx, uint64(srch), srcChannelId, srcPortId)
 		switch {
 		case err != nil:
 			return err
@@ -213,15 +212,6 @@ func UnrelayedAcknowledgements(ctx context.Context, src, dst *Chain, srch, dsth 
 		rs = RelaySequences{Src: []uint64{}, Dst: []uint64{}}
 	)
 	var (
-		// relayUnrelayedAcks uses QueryPacketAcknowledgements method
-		// QueryPacketAcknowledgements retrieve all the acks that have
-		// been accepted at some point which can be thousands of thousands.
-		// Therefore, we need to query start from some point.
-		// We solve it by storing the latest sequence number and latest
-		// page key as returned from query and calculating what is the page to query.
-		latestSrcAckPageKey []byte
-		latestDstAckPageKey []byte
-
 		errSrc, errDst error
 	)
 
@@ -231,15 +221,13 @@ func UnrelayedAcknowledgements(ctx context.Context, src, dst *Chain, srch, dsth 
 		defer wg.Done()
 		rs.Src, errSrc = unrelayedAcknowledgements(ctx,
 			src, srcChannel.ChannelId, srcChannel.PortId, srch,
-			dst, srcChannel.Counterparty.ChannelId, srcChannel.Counterparty.PortId, dsth,
-			&latestSrcAckPageKey)
+			dst, srcChannel.Counterparty.ChannelId, srcChannel.Counterparty.PortId, dsth)
 	}()
 	go func() {
 		defer wg.Done()
 		rs.Dst, errDst = unrelayedAcknowledgements(ctx,
 			dst, srcChannel.Counterparty.ChannelId, srcChannel.Counterparty.PortId, dsth,
-			src, srcChannel.ChannelId, srcChannel.PortId, srch,
-			&latestDstAckPageKey)
+			src, srcChannel.ChannelId, srcChannel.PortId, srch)
 	}()
 	wg.Wait()
 
