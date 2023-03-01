@@ -1,0 +1,24 @@
+build/
+data/
+coverage.out
+release.tar.gz
+.env
+nchainz/
+.idea/
+.csv
+chain-code/
+two-chains/ibc-*
+two-chains/.relayer
+two-chains/*.log
+test/setup/valkeys/*.json
+test/keys/
+_test/setup/valkeys/*.json
+_test/keys/
+.DS_Store
+
+# Don't commit the vendor directory if anyone runs 'go mod vendor'.
+/vendor
+__debug_bin
+--chain-id/config/*
+.vscode/env
+.vscode/launch.json
