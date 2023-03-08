@@ -3,7 +3,6 @@ package relayer
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync"
 
 	"github.com/avast/retry-go/v4"
@@ -11,6 +10,7 @@ import (
 	ibcexported "github.com/cosmos/ibc-go/v3/modules/core/exported"
 	"github.com/cosmos/relayer/v2/relayer/provider"
 	"github.com/cosmos/relayer/v2/relayer/provider/cosmos"
+	"go.uber.org/multierr"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -152,16 +152,25 @@ func UnrelayedSequences(ctx context.Context, src, dst *Chain, srch, dsth int64, 
 func unrelayedAcknowledgements(ctx context.Context,
 	src *Chain, srcChannelId, srcPortId string, srch int64,
 	dst *Chain, dstChannelId, dstPortId string, dsth int64,
+	relayedAckSequences *[]uint64,
 ) ([]uint64, error) {
 	var (
 		srcPacketSeq = []uint64{}
 		rs           = []uint64{}
 		res          []*chantypes.PacketState
 		err          error
+		totalAcks    uint64
+		// by defult, query only latest acks
+		onlyLatest = true
 	)
 
 	if err = retry.Do(func() error {
-		res, err = src.ChainProvider.QueryPacketAcknowledgements(ctx, uint64(srch), srcChannelId, srcPortId)
+		res, totalAcks, err = src.ChainProvider.QueryPacketAcknowledgements(ctx, uint64(srch), srcChannelId, srcPortId, onlyLatest)
+		// heuristic: if we lag in more than AckGapForFullScan, make a full scan
+		if onlyLatest && int(totalAcks) > len(*relayedAckSequences)+AckGapForFullScan {
+			onlyLatest = false
+			return fmt.Errorf("retry QueryPacketAcknowledgements with full scan totalAcks=%d, totalKnownAcks=%d", totalAcks, len(*relayedAckSequences))
+		}
 		switch {
 		case err != nil:
 			return err
@@ -177,20 +186,58 @@ func unrelayedAcknowledgements(ctx context.Context,
 			zap.Error(err),
 		)
 	}
-	if res == nil || err != nil {
+	if res == nil || err != nil || len(res) == 0 {
 		return rs, err
 	}
-	for _, pc := range res {
-		srcPacketSeq = append(srcPacketSeq, pc.Sequence)
+
+	// find max seqence number from result
+	maxSeq := uint64(0)
+	for i, r := range res {
+		if i == 0 || r.Sequence > maxSeq {
+			maxSeq = r.Sequence
+		}
 	}
 
-	sort.Slice(srcPacketSeq, func(i, j int) bool { return srcPacketSeq[i] < srcPacketSeq[j] })
+	// increase capacity if needed
+	requiredCapacityGrowth := int(maxSeq) - cap(*relayedAckSequences)
+	if requiredCapacityGrowth > 0 {
+		// add buffer of 1000
+		*relayedAckSequences = append(*relayedAckSequences, make([]uint64, requiredCapacityGrowth+1000)...)
+	} else {
+		requiredCapacityGrowth = 0
+	}
 
-	if len(srcPacketSeq) > 0 {
+	for _, pc := range res {
+		seq := pc.Sequence
+
+		// check if we saw that sequence, if not add it
+		if (*relayedAckSequences)[seq] == 0 {
+			// seq in new, need to relay it
+			srcPacketSeq = append(srcPacketSeq, seq)
+
+			// mark as seen
+			(*relayedAckSequences)[seq] = seq
+			//fmt.Println(seq)
+		}
+	}
+	if int(totalAcks) >= len(*relayedAckSequences) {
+		panic(fmt.Sprintf("totalAcks >= len(*relayedAckSequences), (%d), (%d)", totalAcks, len(*relayedAckSequences)))
+	}
+
+	// on first run, the number of sequences is large
+	// split it to bulks
+	for i := 0; i < len(srcPacketSeq) && err == nil; i += AckChunkSize {
+		rsChunk := []uint64{}
+
+		end := i + AckChunkSize
+		if end > len(srcPacketSeq) {
+			end = len(srcPacketSeq)
+		}
+
 		// Query all packets sent by dst that have been received by src
 		if err = retry.Do(func() error {
 			// we check unreceived vs the latest height
-			rs, err = dst.ChainProvider.QueryUnreceivedAcknowledgements(ctx, 0, dstChannelId, dstPortId, srcPacketSeq)
+			rsChunk, err = dst.ChainProvider.QueryUnreceivedAcknowledgements(ctx, 0, dstChannelId, dstPortId, srcPacketSeq[i:end])
 			return err
 		}, retry.Context(ctx), RtyAtt, RtyDel, RtyErr); err != nil {
 			dst.log.Error(
@@ -201,6 +248,7 @@ func unrelayedAcknowledgements(ctx context.Context,
 				zap.Error(err),
 			)
 		}
+		rs = append(rs, rsChunk...)
 	}
 
 	return rs, err
@@ -212,7 +260,8 @@ func UnrelayedAcknowledgements(ctx context.Context, src, dst *Chain, srch, dsth 
 		rs = RelaySequences{Src: []uint64{}, Dst: []uint64{}}
 	)
 	var (
-		errSrc, errDst error
+		errSrc, errDst                                 error
+		relayedAckSequencesSrc, relayedAckSequencesDst = []uint64{}, []uint64{}
 	)
 
 	var wg sync.WaitGroup
@@ -221,13 +270,13 @@ func UnrelayedAcknowledgements(ctx context.Context, src, dst *Chain, srch, dsth 
 		defer wg.Done()
 		rs.Src, errSrc = unrelayedAcknowledgements(ctx,
 			src, srcChannel.ChannelId, srcChannel.PortId, srch,
-			dst, srcChannel.Counterparty.ChannelId, srcChannel.Counterparty.PortId, dsth)
+			dst, srcChannel.Counterparty.ChannelId, srcChannel.Counterparty.PortId, dsth, &relayedAckSequencesSrc)
 	}()
 	go func() {
 		defer wg.Done()
 		rs.Dst, errDst = unrelayedAcknowledgements(ctx,
 			dst, srcChannel.Counterparty.ChannelId, srcChannel.Counterparty.PortId, dsth,
-			src, srcChannel.ChannelId, srcChannel.PortId, srch)
+			src, srcChannel.ChannelId, srcChannel.PortId, srch, &relayedAckSequencesDst)
 	}()
 	wg.Wait()
 
@@ -325,37 +374,38 @@ func relayAcknowledgements(ctx context.Context, log *zap.Logger,
 
 // RelayAcknowledgements creates transactions to relay acknowledgements from src to dst and from dst to src
 func RelayAcknowledgements(ctx context.Context, log *zap.Logger, src, dst *Chain, srch, dsth int64, sp RelaySequences, maxTxSize, maxMsgLength uint64, memo string, srcChannel *chantypes.IdentifiedChannel) error {
+	var errors error
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
 		var wg sync.WaitGroup
-		var srcErr, DstErr error
+
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			srcErr = relayAcknowledgements(ctx, log,
+			err := relayAcknowledgements(ctx, log,
 				src, srcChannel.ChannelId, srcChannel.PortId, srch, sp.Src,
 				dst, srcChannel.Counterparty.ChannelId, srcChannel.Counterparty.PortId,
 				maxTxSize, maxMsgLength, memo)
+			if err != nil {
+				multierr.AppendInto(&errors, err)
+			}
 		}()
 		go func() {
 			defer wg.Done()
-			DstErr = relayAcknowledgements(ctx, log,
+			err := relayAcknowledgements(ctx, log,
 				dst, srcChannel.Counterparty.ChannelId, srcChannel.Counterparty.PortId, dsth, sp.Dst,
 				src, srcChannel.ChannelId, srcChannel.PortId,
 				maxTxSize, maxMsgLength, memo)
+			if err != nil {
+				multierr.AppendInto(&errors, err)
+			}
 		}()
 		wg.Wait()
 
-		if srcErr != nil {
-			println(srcErr.Error())
-		}
-		if DstErr != nil {
-			println(srcErr.Error())
-		}
 	}
-	return nil
+	return errors
 }
 
 // RelayPackets creates transactions to relay packets from src to dst and from dst to src

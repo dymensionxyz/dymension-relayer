@@ -24,8 +24,10 @@ type ActiveChannel struct {
 }
 
 const (
-	ProcessorEvents string = "events"
-	ProcessorLegacy        = "legacy"
+	ProcessorEvents   string = "events"
+	ProcessorLegacy          = "legacy"
+	AckChunkSize             = 1000
+	AckGapForFullScan        = 20
 )
 
 // StartRelayer starts the main relaying loop and returns a channel that will contain any control-flow related errors.
@@ -308,6 +310,17 @@ func relayUnrelayedPacketsAndAcks(ctx context.Context, log *zap.Logger, wg *sync
 		channels <- srcChannel
 	}()
 
+	var relayedAckSequencesSrc, relayedAckSequencesDst []uint64 = []uint64{}, []uint64{}
+
+	log.Info(
+		"Restart relaying",
+		zap.String("src_chain_id", src.ChainID()),
+		zap.String("src_channel_id", srcChannel.channel.ChannelId),
+		zap.String("src_port_id", srcChannel.channel.PortId),
+		zap.String("dst_chain_id", dst.ChainID()),
+		zap.String("dst_channel_id", srcChannel.channel.Counterparty.ChannelId),
+		zap.String("dst_port_id", srcChannel.channel.Counterparty.PortId),
+	)
 	for {
 		if ok := relayUnrelayedPackets(ctx, log, src, dst,
 			maxTxSize, maxMsgLength, memo,
@@ -316,7 +329,8 @@ func relayUnrelayedPacketsAndAcks(ctx context.Context, log *zap.Logger, wg *sync
 		}
 		if ok := relayUnrelayedAcks(ctx, log, src, dst,
 			maxTxSize, maxMsgLength, memo,
-			srcChannel.channel); !ok {
+			srcChannel.channel,
+			&relayedAckSequencesSrc, &relayedAckSequencesDst); !ok {
 			return
 		}
 
@@ -337,7 +351,8 @@ func relayUnrelayedPackets(ctx context.Context, log *zap.Logger, src, dst *Chain
 	srch, dsth, err := QueryLatestHeights(ctx, src, dst)
 	if err != nil {
 		log.Warn(
-			"Relay acknowledgements error")
+			"QueryLatestHeights error",
+			zap.Error(err))
 		return false
 	}
 
@@ -429,12 +444,14 @@ func relayUnrelayedAcks(ctx context.Context,
 	log *zap.Logger, src, dst *Chain,
 	maxTxSize, maxMsgLength uint64, memo string,
 	srcChannel *types.IdentifiedChannel,
+	relayedAckSequencesSrc, relayedAckSequencesDst *[]uint64,
 ) bool {
 
 	srch, dsth, err := QueryLatestHeights(ctx, src, dst)
 	if err != nil {
 		log.Warn(
-			"Relay acknowledgements error")
+			"QueryLatestHeights error",
+			zap.Error(err))
 		return false
 	}
 
@@ -446,22 +463,22 @@ func relayUnrelayedAcks(ctx context.Context,
 		srcErr = relayUnrelayedAcksHelper(ctx, log,
 			src, srcChannel.ChannelId, srcChannel.PortId, srch,
 			dst, srcChannel.Counterparty.ChannelId, srcChannel.Counterparty.PortId, dsth,
-			maxTxSize, maxMsgLength, memo)
+			maxTxSize, maxMsgLength, memo, relayedAckSequencesSrc)
 	}()
 	go func() {
 		defer wg.Done()
 		DstErr = relayUnrelayedAcksHelper(ctx, log,
 			dst, srcChannel.Counterparty.ChannelId, srcChannel.Counterparty.PortId, dsth,
 			src, srcChannel.ChannelId, srcChannel.PortId, srch,
-			maxTxSize, maxMsgLength, memo)
+			maxTxSize, maxMsgLength, memo, relayedAckSequencesDst)
 	}()
 	wg.Wait()
 	if srcErr != nil {
-		println(srcErr.Error())
+		//println(srcErr.Error())
 		return false
 	}
 	if DstErr != nil {
-		println(srcErr.Error())
+		//println(srcErr.Error())
 		return false
 	}
 	return true
@@ -471,6 +488,7 @@ func relayUnrelayedAcksHelper(ctx context.Context, log *zap.Logger,
 	src *Chain, srcChannelId, srcPortId string, srch int64,
 	dst *Chain, dstChannelId, dstPortId string, dsth int64,
 	maxTxSize, maxMsgLength uint64, memo string,
+	relayedAckSequences *[]uint64,
 ) error {
 	// we are quering the previous heights because later
 	// when we query tendermint proof, the proof is in the following  height
@@ -480,11 +498,14 @@ func relayUnrelayedAcksHelper(ctx context.Context, log *zap.Logger,
 	var err error = nil
 	var sequences []uint64
 
+	relayedAckSequencesCandidated := *relayedAckSequences
+
 	// Fetch any unrelayed acks generated on src
 	// depending on the channel order
 	sequences, err = unrelayedAcknowledgements(ctx,
 		src, srcChannelId, srcPortId, adjustedSrch,
 		dst, dstChannelId, dstPortId, adjustedDsth,
+		&relayedAckSequencesCandidated,
 	)
 
 	// If there are no unrelayed acks, stop early.
@@ -527,6 +548,7 @@ func relayUnrelayedAcksHelper(ctx context.Context, log *zap.Logger,
 				zap.Error(err),
 			)
 		}
+
 	} else {
 		log.Debug(
 			"No acknowledgements in queue",
@@ -548,6 +570,10 @@ func relayUnrelayedAcksHelper(ctx context.Context, log *zap.Logger,
 			zap.String("dst_channel_id", dstChannelId),
 			zap.Error(ctx.Err()),
 		)
+	} else {
+		// update relayed sequences
+		*relayedAckSequences = relayedAckSequencesCandidated
 	}
+
 	return err
 }

@@ -698,11 +698,12 @@ func (cc *CosmosProvider) QueryPacketCommitments(ctx context.Context, height uin
 }
 
 // QueryPacketAcknowledgements returns an array of packet acks
-func (cc *CosmosProvider) QueryPacketAcknowledgements(ctx context.Context, height uint64, channelid, portid string) (acknowledgements []*chantypes.PacketState, err error) {
+func (cc *CosmosProvider) QueryPacketAcknowledgements(ctx context.Context, height uint64, channelid, portid string, onlyLatest bool) (acknowledgements []*chantypes.PacketState, totalAcks uint64, err error) {
 	qc := chantypes.NewQueryClient(cc)
 	ctxWithHeight := lens.SetHeightOnContext(ctx, int64(height))
 	total := []*chantypes.PacketState{}
 	pagination := DefaultPageRequest()
+	pagination.Reverse = true
 
 	for {
 		res, err := qc.PacketAcknowledgements(ctxWithHeight, &chantypes.QueryPacketAcknowledgementsRequest{
@@ -711,16 +712,23 @@ func (cc *CosmosProvider) QueryPacketAcknowledgements(ctx context.Context, heigh
 			Pagination: pagination,
 		})
 		if err != nil {
-			return nil, err
+			return nil, 0, err
+		}
+		if totalAcks == 0 {
+			totalAcks = res.Pagination.Total
 		}
 		total = append(total, res.Acknowledgements...)
+		if onlyLatest {
+			break
+		}
 		if len(res.Pagination.NextKey) == 0 {
 			break
 		}
 		pagination = DefaultPageRequest()
 		pagination.Key = res.Pagination.NextKey
+		pagination.Reverse = true
 	}
-	return total, nil
+	return total, totalAcks, nil
 }
 
 // QueryUnreceivedPackets returns a list of unrelayed packet commitments

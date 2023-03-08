@@ -45,7 +45,6 @@ const (
 	flagProcessor               = "processor"
 	flagInitialBlockHistory     = "block-history"
 	flagMemo                    = "memo"
-	flagSettlementConfig        = "settlement-config"
 )
 
 const (
@@ -176,14 +175,6 @@ func getTimeout(cmd *cobra.Command) (time.Duration, error) {
 func urlFlag(v *viper.Viper, cmd *cobra.Command) *cobra.Command {
 	cmd.Flags().StringP(flagURL, "u", "", "url to fetch data from")
 	if err := v.BindPFlag(flagURL, cmd.Flags().Lookup(flagURL)); err != nil {
-		panic(err)
-	}
-	return cmd
-}
-
-func settlementConfigFlag(v *viper.Viper, cmd *cobra.Command) *cobra.Command {
-	cmd.Flags().String(flagSettlementConfig, "", "config for init dymension-settlement")
-	if err := v.BindPFlag(flagSettlementConfig, cmd.Flags().Lookup(flagSettlementConfig)); err != nil {
 		panic(err)
 	}
 	return cmd

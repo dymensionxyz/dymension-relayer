@@ -35,6 +35,7 @@ func chainsCmd(a *appState) *cobra.Command {
 		chainsListCmd(a),
 		chainsRegistryList(a),
 		chainsDeleteCmd(a),
+		chainsSetSettlementCmd(a),
 		chainsAddCmd(a),
 		chainsShowCmd(a),
 		chainsAddrCmd(a),
@@ -135,6 +136,27 @@ $ %s ch d ibc-0`, appName, appName)),
 				return errChainNotFound(args[0])
 			}
 			a.Config.DeleteChain(args[0])
+			return a.OverwriteConfig(a.Config)
+		},
+	}
+	return cmd
+}
+
+func chainsSetSettlementCmd(a *appState) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "set-settlement chain_name",
+		Aliases: []string{"ss"},
+		Short:   "Set an existing chain as the settlement chain based on chain-id in the configuration file",
+		Args:    withUsage(cobra.ExactArgs(1)),
+		Example: strings.TrimSpace(fmt.Sprintf(`
+$ %s chains set-settlement hub
+$ %s ch ss hub`, appName, appName)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, ok := a.Config.Chains[args[0]]
+			if !ok {
+				return errChainNotFound(args[0])
+			}
+			a.Config.SetSettlement(args[0])
 			return a.OverwriteConfig(a.Config)
 		},
 	}
