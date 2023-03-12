@@ -123,11 +123,6 @@ $ %s cfg i`, appName, defaultHome, appName)),
 				return err
 			}
 
-			settlementConfig, err := cmd.Flags().GetString(flagSettlementConfig)
-			if err != nil {
-				return err
-			}
-
 			cfgDir := path.Join(home, "config")
 			cfgPath := path.Join(cfgDir, "config.yaml")
 
@@ -158,7 +153,7 @@ $ %s cfg i`, appName, defaultHome, appName)),
 				memo, _ := cmd.Flags().GetString(flagMemo)
 
 				// And write the default config to that location...
-				if _, err = f.Write(defaultConfig(memo, settlementConfig)); err != nil {
+				if _, err = f.Write(defaultConfig(memo)); err != nil {
 					return err
 				}
 
@@ -171,7 +166,6 @@ $ %s cfg i`, appName, defaultHome, appName)),
 		},
 	}
 	cmd = memoFlag(a.Viper, cmd)
-	cmd = settlementConfigFlag(a.Viper, cmd)
 	return cmd
 }
 
@@ -278,11 +272,7 @@ func (c *Config) Wrapped() *ConfigOutputWrapper {
 		}
 		providers[chain.ChainProvider.ChainName()] = pcfgw
 	}
-	settlementChainName := ""
-	if c.Settlement != nil {
-		settlementChainName = c.Settlement.ChainName()
-	}
-	return &ConfigOutputWrapper{Global: c.Global, ProviderConfigs: providers, Paths: c.Paths, Settlement: settlementChainName}
+	return &ConfigOutputWrapper{Global: c.Global, ProviderConfigs: providers, Paths: c.Paths, Settlement: c.Settlement}
 }
 
 // rlyMemo returns a formatted message memo string
@@ -313,10 +303,10 @@ func (c *Config) memo(cmd *cobra.Command) string {
 
 // Config represents the config file for the relayer
 type Config struct {
-	Global     GlobalConfig                        `yaml:"global" json:"global"`
-	Chains     relayer.Chains                      `yaml:"chains" json:"chains"`
-	Paths      relayer.Paths                       `yaml:"paths" json:"paths"`
-	Settlement *cosmos.DymensionSettlementProvider `yaml:"settlement" json:"settlement"`
+	Global     GlobalConfig   `yaml:"global" json:"global"`
+	Chains     relayer.Chains `yaml:"chains" json:"chains"`
+	Paths      relayer.Paths  `yaml:"paths" json:"paths"`
+	Settlement string         `yaml:"settlement" json:"settlement"`
 }
 
 // ConfigOutputWrapper is an intermediary type for writing the config to disk and stdout
@@ -445,12 +435,12 @@ func (c Config) MustYAML() []byte {
 	return out
 }
 
-func defaultConfig(memo string, settlement string) []byte {
+func defaultConfig(memo string) []byte {
 	return Config{
 		Global:     newDefaultGlobalConfig(memo),
 		Chains:     relayer.Chains{},
 		Paths:      relayer.Paths{},
-		Settlement: nil,
+		Settlement: "",
 	}.MustYAML()
 }
 
@@ -540,6 +530,11 @@ func (c *Config) DeleteChain(chain string) {
 	delete(c.Chains, chain)
 }
 
+// Set modifies c in-place to remove any chains that have the given name.
+func (c *Config) SetSettlement(chain string) {
+	c.Settlement = chain
+}
+
 // validateConfig is used to validate the GlobalConfig values
 func validateConfig(c *Config) error {
 	_, err := time.ParseDuration(c.Global.Timeout)
@@ -598,7 +593,6 @@ func initConfig(cmd *cobra.Command, a *appState) error {
 				chains[chainName] = chain
 			}
 
-			var settlement *cosmos.DymensionSettlementProvider = nil
 			// Create dymension settelemnt if configured
 			if cfgWrapper.Settlement != "" {
 				settlementChain := chains[cfgWrapper.Settlement]
@@ -609,7 +603,7 @@ func initConfig(cmd *cobra.Command, a *appState) error {
 				if !ok {
 					return fmt.Errorf("%s is not a CosmosProvider", cfgWrapper.Settlement)
 				}
-				settlement, err = cosmos.NewSettlementProvider(cp)
+				_, err = cosmos.NewSettlementProvider(cp)
 				if err != nil {
 					return err
 				}
@@ -619,7 +613,7 @@ func initConfig(cmd *cobra.Command, a *appState) error {
 				Global:     cfgWrapper.Global,
 				Chains:     chains,
 				Paths:      cfgWrapper.Paths,
-				Settlement: settlement,
+				Settlement: cfgWrapper.Settlement,
 			}
 
 			// ensure config has []*relayer.Chain used for all chain operations

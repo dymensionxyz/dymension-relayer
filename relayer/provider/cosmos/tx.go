@@ -167,24 +167,6 @@ func (cc *CosmosProvider) SendMessages(ctx context.Context, msgs []provider.Rela
 
 	var resp *sdk.TxResponse = nil
 
-	// if false {
-	// 	var err error = nil
-	// 	cc.log.Info("Sending messages:")
-	// 	for _, msg := range msgs {
-	// 		cc.log.Info(msg.Type(), zap.String("chain_id", cc.PCfg.ChainID), zap.String("seq", fmt.Sprintf("%d", msg.Seq())))
-	// 		resp, _, err = cc.BuildAndBroadcast(ctx, []provider.RelayerMessage{msg}, memo)
-	// 		if err != nil {
-	// 			return nil, false, err
-	// 		}
-	// 		cc.log.Info(msg.Type(),
-	// 			zap.String("chain_id", cc.PCfg.ChainID),
-	// 			zap.String("seq", fmt.Sprintf("%d", msg.Seq())))
-	// 		cc.log.Info(resp.RawLog)
-
-	// 	}
-	// }
-
-	// if true {
 	if err := retry.Do(func() error {
 		txResponse, bRetry, err := cc.BuildAndBroadcast(ctx, msgs, memo)
 		if err != nil {
@@ -211,9 +193,26 @@ func (cc *CosmosProvider) SendMessages(ctx context.Context, msgs []provider.Rela
 			zap.Error(err),
 		)
 	})); err != nil || resp == nil {
-		return nil, false, err
+		// try one by one
+		var err error = nil
+		cc.log.Info("Try to send messages one by one:")
+		for _, msg := range msgs {
+			cc.log.Info(msg.Type(), zap.String("chain_id", cc.PCfg.ChainID), zap.String("seq", fmt.Sprintf("%d", msg.Seq())))
+			resp, _, err = cc.BuildAndBroadcast(ctx, []provider.RelayerMessage{msg}, memo)
+			if err != nil {
+				cc.log.Info(msg.Type(),
+					zap.String("chain_id", cc.PCfg.ChainID),
+					zap.String("seq", fmt.Sprintf("%d", msg.Seq())),
+					zap.Error(err))
+				continue
+			}
+
+		}
+		if err != nil {
+			return nil, false, err
+		}
 	}
-	//	}
+
 	rlyResp := &provider.RelayerTxResponse{
 		Height: resp.Height,
 		TxHash: resp.TxHash,
