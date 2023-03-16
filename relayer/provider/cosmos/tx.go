@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +27,7 @@ import (
 	tmclient "github.com/cosmos/ibc-go/v3/modules/light-clients/07-tendermint/types"
 	"github.com/cosmos/relayer/v2/relayer/provider"
 	"github.com/tendermint/tendermint/light"
+	tmprovider "github.com/tendermint/tendermint/light/provider"
 	types2 "github.com/tendermint/tendermint/proto/tendermint/types"
 	tmtypes "github.com/tendermint/tendermint/types"
 	"go.uber.org/zap"
@@ -32,9 +35,9 @@ import (
 
 // Variables used for retries
 var (
-	rtyAttNum = uint(30)
+	rtyAttNum = uint(5)
 	rtyAtt    = retry.Attempts(rtyAttNum)
-	rtyDel    = retry.Delay(time.Second * 10)
+	rtyDel    = retry.Delay(time.Second * 1)
 	rtyErr    = retry.LastErrorOnly(true)
 )
 
@@ -1927,12 +1930,173 @@ func (cc *CosmosProvider) IBCHeaderAtHeight(ctx context.Context, h int64) (provi
 	}, nil
 }
 
+var (
+	// This is very brittle, see: https://github.com/tendermint/tendermint/issues/4740
+	regexpMissingHeight = regexp.MustCompile(`height \d+ is not available`)
+	regexpTooHigh       = regexp.MustCompile(`height \d+ must be less than or equal to`)
+	regexpTimedOut      = regexp.MustCompile(`Timeout exceeded`)
+
+	maxRetryAttempts      = 5
+	timeout          uint = 5 // sec.
+)
+
+func validateHeight(height int64) (*int64, error) {
+	if height < 0 {
+		return nil, fmt.Errorf("expected height >= 0, got height %d", height)
+	}
+
+	h := &height
+	if height == 0 {
+		h = nil
+	}
+	return h, nil
+}
+
+// exponential backoff (with jitter)
+// 0.5s -> 2s -> 4.5s -> 8s -> 12.5 with 1s variation
+func backoffTimeout(attempt uint16) time.Duration {
+	//nolint:gosec // G404: Use of weak random number generator
+	return time.Duration(500*attempt*attempt)*time.Millisecond + time.Duration(rand.Intn(1000))*time.Millisecond
+}
+
+func (cc *CosmosProvider) signedHeader(ctx context.Context, height *int64) (*tmtypes.SignedHeader, error) {
+
+	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
+		commit, err := cc.RPCClient.Commit(ctx, height)
+		switch {
+		case err == nil:
+			return &commit.SignedHeader, nil
+
+		case regexpTooHigh.MatchString(err.Error()):
+			return nil, tmprovider.ErrHeightTooHigh
+
+		case regexpMissingHeight.MatchString(err.Error()):
+			return nil, tmprovider.ErrLightBlockNotFound
+
+		case regexpTimedOut.MatchString(err.Error()):
+			// we wait and try again with exponential backoff
+			time.Sleep(backoffTimeout(uint16(attempt)))
+			continue
+
+		// either context was cancelled or connection refused.
+		default:
+			return nil, err
+		}
+	}
+	return nil, tmprovider.ErrNoResponse
+}
+
+func (cc *CosmosProvider) validatorSet(ctx context.Context, height *int64) (*tmtypes.ValidatorSet, error) {
+	// Since the malicious node could report a massive number of pages, making us
+	// spend a considerable time iterating, we restrict the number of pages here.
+	// => 10000 validators max
+	const maxPages = 100
+
+	var (
+		perPage = 100
+		vals    = []*tmtypes.Validator{}
+		page    = 1
+		total   = -1
+	)
+
+OUTER_LOOP:
+	for len(vals) != total && page <= maxPages {
+		for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
+			res, err := cc.RPCClient.Validators(ctx, height, &page, &perPage)
+			switch {
+			case err == nil:
+				// Validate response.
+				if len(res.Validators) == 0 {
+					return nil, tmprovider.ErrBadLightBlock{
+						Reason: fmt.Errorf("validator set is empty (height: %d, page: %d, per_page: %d)",
+							height, page, perPage),
+					}
+				}
+				if res.Total <= 0 {
+					return nil, tmprovider.ErrBadLightBlock{
+						Reason: fmt.Errorf("total number of vals is <= 0: %d (height: %d, page: %d, per_page: %d)",
+							res.Total, height, page, perPage),
+					}
+				}
+
+				total = res.Total
+				vals = append(vals, res.Validators...)
+				page++
+				continue OUTER_LOOP
+
+			case regexpTooHigh.MatchString(err.Error()):
+				return nil, tmprovider.ErrHeightTooHigh
+
+			case regexpMissingHeight.MatchString(err.Error()):
+				return nil, tmprovider.ErrLightBlockNotFound
+
+			// if we have exceeded retry attempts then return no response error
+			case attempt == maxRetryAttempts:
+				return nil, tmprovider.ErrNoResponse
+
+			case regexpTimedOut.MatchString(err.Error()):
+				// we wait and try again with exponential backoff
+				time.Sleep(backoffTimeout(uint16(attempt)))
+				continue
+
+			// context canceled or connection refused we return the error
+			default:
+				return nil, err
+			}
+
+		}
+	}
+
+	valSet, err := tmtypes.ValidatorSetFromExistingValidators(vals)
+	if err != nil {
+		return nil, tmprovider.ErrBadLightBlock{Reason: err}
+	}
+	return valSet, nil
+}
+
+// LightBlock fetches a LightBlock at the given height and checks the
+// chainID matches.
+func (cc *CosmosProvider) LightBlock(ctx context.Context, height int64) (*tmtypes.LightBlock, error) {
+	h, err := validateHeight(height)
+	if err != nil {
+		return nil, tmprovider.ErrBadLightBlock{Reason: err}
+	}
+
+	sh, err := cc.signedHeader(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+
+	if height != 0 && sh.Height != height {
+		return nil, tmprovider.ErrBadLightBlock{
+			Reason: fmt.Errorf("height %d responded doesn't match height %d requested", sh.Height, height),
+		}
+	}
+
+	vs, err := cc.validatorSet(ctx, &sh.Height)
+	if err != nil {
+		return nil, err
+	}
+
+	lb := &tmtypes.LightBlock{
+		SignedHeader: sh,
+		ValidatorSet: vs,
+	}
+
+	// err = lb.ValidateBasic(p.chainID)
+	// if err != nil {
+	// 	return nil, tmprovider.ErrBadLightBlock{Reason: err}
+	// }
+
+	return lb, nil
+}
+
 func (cc *CosmosProvider) GetLightSignedHeaderAtHeight(ctx context.Context, h int64) (ibcexported.Header, error) {
 	if h == 0 {
 		return nil, fmt.Errorf("height cannot be 0")
 	}
 
-	lightBlock, err := cc.LightProvider.LightBlock(ctx, h)
+	lightBlock, err := cc.LightBlock(ctx, h)
 	if err != nil {
 		return nil, err
 	}
