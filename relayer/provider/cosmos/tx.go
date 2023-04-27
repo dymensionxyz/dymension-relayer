@@ -1616,7 +1616,7 @@ func (cc *CosmosProvider) RelayPacketFromSequence(
 	}
 
 	if len(rcvPackets) >= 1 {
-		pkt := rcvPackets[0]
+		pkt := rcvPackets[len(rcvPackets)-1]
 		if seq != pkt.Seq() {
 			return nil, nil, fmt.Errorf("wrong sequence: expected(%d) got(%d)", seq, pkt.Seq())
 		}
