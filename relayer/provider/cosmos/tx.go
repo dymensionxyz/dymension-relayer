@@ -1610,8 +1610,8 @@ func (cc *CosmosProvider) RelayPacketFromSequence(
 		return nil, nil, err
 	case len(rcvPackets) == 0 && len(timeoutPackets) == 0:
 		return nil, nil, fmt.Errorf("no relay msgs created from query response")
-	case len(rcvPackets)+len(timeoutPackets) > 1:
-		return nil, nil, fmt.Errorf("more than one relay msg found in tx query")
+		// case len(rcvPackets)+len(timeoutPackets) > 1:
+		// 	return nil, nil, fmt.Errorf("more than one relay msg found in tx query")
 	}
 
 	if len(rcvPackets) == 1 {
