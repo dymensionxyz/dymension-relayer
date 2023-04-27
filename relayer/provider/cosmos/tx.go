@@ -1610,11 +1610,12 @@ func (cc *CosmosProvider) RelayPacketFromSequence(
 		return nil, nil, err
 	case len(rcvPackets) == 0 && len(timeoutPackets) == 0:
 		return nil, nil, fmt.Errorf("no relay msgs created from query response")
-		// case len(rcvPackets)+len(timeoutPackets) > 1:
+	case len(rcvPackets)+len(timeoutPackets) > 1:
+		cc.log.Error(fmt.Sprintf("should have errored, but skipped. rcvPackets %d, timeoutPackets: %d", len(rcvPackets), len(timeoutPackets)))
 		// 	return nil, nil, fmt.Errorf("more than one relay msg found in tx query")
 	}
 
-	if len(rcvPackets) == 1 {
+	if len(rcvPackets) >= 1 {
 		pkt := rcvPackets[0]
 		if seq != pkt.Seq() {
 			return nil, nil, fmt.Errorf("wrong sequence: expected(%d) got(%d)", seq, pkt.Seq())
@@ -1628,7 +1629,7 @@ func (cc *CosmosProvider) RelayPacketFromSequence(
 		return packet, nil, nil
 	}
 
-	if len(timeoutPackets) == 1 {
+	if len(timeoutPackets) >= 1 {
 		pkt := timeoutPackets[0]
 		if seq != pkt.Seq() {
 			return nil, nil, fmt.Errorf("wrong sequence: expected(%d) got(%d)", seq, pkt.Seq())
