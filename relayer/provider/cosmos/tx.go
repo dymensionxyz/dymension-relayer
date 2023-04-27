@@ -1598,7 +1598,8 @@ func (cc *CosmosProvider) RelayPacketFromSequence(
 	case len(txs) == 0:
 		return nil, nil, fmt.Errorf("no transactions returned with query")
 	case len(txs) > 1:
-		return nil, nil, fmt.Errorf("more than one transaction returned with query")
+		cc.log.Error(fmt.Sprintf("should have errored, but skipped. multiple txs returned with query: %v", txs))
+		// return nil, nil, fmt.Errorf("more than one transaction returned with query")
 	}
 	if txs[0].Height > int64(srch) {
 		return nil, nil, nil
