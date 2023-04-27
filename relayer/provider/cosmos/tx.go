@@ -1601,58 +1601,68 @@ func (cc *CosmosProvider) RelayPacketFromSequence(
 		cc.log.Error(fmt.Sprintf("should have errored, but skipped. multiple txs returned with query: %v", txs))
 		// return nil, nil, fmt.Errorf("more than one transaction returned with query")
 	}
-	if txs[0].Height > int64(srch) {
-		return nil, nil, nil
-	}
-
-	rcvPackets, timeoutPackets, err := cc.relayPacketsFromResultTx(ctx, src, dst, int64(dsth), txs[0], dstChanId, dstPortId, dstClientId, srcChanId, srcPortId, srcClientId)
-	switch {
-	case err != nil:
-		return nil, nil, err
-	case len(rcvPackets) == 0 && len(timeoutPackets) == 0:
-		return nil, nil, fmt.Errorf("no relay msgs created from query response")
-	case len(rcvPackets)+len(timeoutPackets) > 1:
-		cc.log.Error(fmt.Sprintf("should have errored, but skipped. rcvPackets %d, timeoutPackets: %d", len(rcvPackets), len(timeoutPackets)))
-		// 	return nil, nil, fmt.Errorf("more than one relay msg found in tx query")
-	}
 
 	var pkt provider.RelayPacket = nil
-	if len(rcvPackets) > 1 {
-		for i, p := range rcvPackets {
-			cc.log.Info(fmt.Sprintf("rcvPackets[%d]: seq %d", i, p.Seq()))
-			if p.Seq() == seq {
-				pkt = p
+	for _, tx := range txs {
+		if tx.Height > int64(srch) {
+			return nil, nil, nil
+		}
+
+		rcvPackets, timeoutPackets, err := cc.relayPacketsFromResultTx(ctx, src, dst, int64(dsth), tx, dstChanId, dstPortId, dstClientId, srcChanId, srcPortId, srcClientId)
+		switch {
+		case err != nil:
+			return nil, nil, err
+		case len(rcvPackets) == 0 && len(timeoutPackets) == 0:
+			return nil, nil, fmt.Errorf("no relay msgs created from query response")
+		case len(rcvPackets)+len(timeoutPackets) > 1:
+			cc.log.Error(fmt.Sprintf("should have errored, but skipped. rcvPackets %d, timeoutPackets: %d", len(rcvPackets), len(timeoutPackets)))
+			// 	return nil, nil, fmt.Errorf("more than one relay msg found in tx query")
+		}
+
+		if len(rcvPackets) >= 1 {
+			for i, p := range rcvPackets {
+				cc.log.Info(fmt.Sprintf("rcvPackets[%d]: seq %d", i, p.Seq()))
+				if p.Seq() == seq {
+					pkt = p
+				}
+			}
+		} else if len(timeoutPackets) >= 1 {
+			for i, p := range timeoutPackets {
+				cc.log.Info(fmt.Sprintf("timeoutPackets[%d]: seq %d", i, p.Seq()))
+				if p.Seq() == seq {
+					pkt = p
+				}
 			}
 		}
-	}
 
-	if len(rcvPackets) >= 1 {
 		if pkt == nil {
-			pkt = rcvPackets[0]
-		}
-		if seq != pkt.Seq() {
-			return nil, nil, fmt.Errorf("wrong sequence: expected(%d) got(%d)", seq, pkt.Seq())
+			continue
 		}
 
-		packet, err := dst.MsgRelayRecvPacket(ctx, src, int64(srch), pkt, srcChanId, srcPortId, dstChanId, dstPortId)
-		if err != nil {
-			return nil, nil, err
+		if len(rcvPackets) >= 1 {
+			if seq != pkt.Seq() {
+				return nil, nil, fmt.Errorf("wrong sequence: expected(%d) got(%d)", seq, pkt.Seq())
+			}
+
+			packet, err := dst.MsgRelayRecvPacket(ctx, src, int64(srch), pkt, srcChanId, srcPortId, dstChanId, dstPortId)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			return packet, nil, nil
 		}
 
-		return packet, nil, nil
-	}
+		if len(timeoutPackets) >= 1 {
+			if seq != pkt.Seq() {
+				return nil, nil, fmt.Errorf("wrong sequence: expected(%d) got(%d)", seq, pkt.Seq())
+			}
 
-	if len(timeoutPackets) >= 1 {
-		pkt := timeoutPackets[0]
-		if seq != pkt.Seq() {
-			return nil, nil, fmt.Errorf("wrong sequence: expected(%d) got(%d)", seq, pkt.Seq())
+			timeout, err := src.MsgRelayTimeout(ctx, dst, int64(dsth), pkt, dstChanId, dstPortId, srcChanId, srcPortId, order)
+			if err != nil {
+				return nil, nil, err
+			}
+			return nil, timeout, nil
 		}
-
-		timeout, err := src.MsgRelayTimeout(ctx, dst, int64(dsth), pkt, dstChanId, dstPortId, srcChanId, srcPortId, order)
-		if err != nil {
-			return nil, nil, err
-		}
-		return nil, timeout, nil
 	}
 
 	return nil, nil, fmt.Errorf("should have errored before here")
