@@ -1615,8 +1615,20 @@ func (cc *CosmosProvider) RelayPacketFromSequence(
 		// 	return nil, nil, fmt.Errorf("more than one relay msg found in tx query")
 	}
 
+	var pkt provider.RelayPacket = nil
+	if len(rcvPackets) > 1 {
+		for i, p := range rcvPackets {
+			cc.log.Info(fmt.Sprintf("rcvPackets[%d]: seq %d", i, p.Seq()))
+			if p.Seq() == seq {
+				pkt = p
+			}
+		}
+	}
+
 	if len(rcvPackets) >= 1 {
-		pkt := rcvPackets[len(rcvPackets)-1]
+		if pkt != nil {
+			pkt = rcvPackets[0]
+		}
 		if seq != pkt.Seq() {
 			return nil, nil, fmt.Errorf("wrong sequence: expected(%d) got(%d)", seq, pkt.Seq())
 		}
