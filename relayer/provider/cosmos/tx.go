@@ -32,7 +32,7 @@ import (
 
 // Variables used for retries
 var (
-	rtyAttNum = uint(30)
+	rtyAttNum = uint(5)
 	rtyAtt    = retry.Attempts(rtyAttNum)
 	rtyDel    = retry.Delay(time.Second * 10)
 	rtyErr    = retry.LastErrorOnly(true)
@@ -134,7 +134,7 @@ func (cc *CosmosProvider) BuildAndBroadcast(ctx context.Context, msgs []provider
 			return nil, false, err
 		}
 
-		return nil, true, err
+		return nil, false, err
 	}
 
 	resp, err := cc.BroadcastTx(ctx, txBytes)
