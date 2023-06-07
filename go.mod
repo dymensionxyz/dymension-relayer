@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/cosmos/cosmos-sdk v0.45.10
-	github.com/dymensionxyz/dymension v0.1.0-alpha.0.20230118111121-3e92b9518a3f
+	github.com/dymensionxyz/dymension v0.2.0-beta.0.20230607115558-745644a96ea6
 	github.com/gogo/protobuf v1.3.3
 	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/spf13/cobra v1.6.1
