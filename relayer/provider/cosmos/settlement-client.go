@@ -35,8 +35,7 @@ func NewSettlementProvider(cp *CosmosProvider) (*DymensionSettlementProvider, er
 // QueryLatestFinalizedHeight return the latest finalized height of a rollapp
 func (cc *DymensionSettlementProvider) QueryLatestFinalizedHeight(ctx context.Context, rollapId string) (int64, error) {
 	qc := rollapptypes.NewQueryClient(cc)
-	res, err := qc.LatestFinalizedStateInfo(ctx,
-		&rollapptypes.QueryGetLatestFinalizedStateInfoRequest{RollappId: rollapId})
+	res, err := qc.StateInfo(ctx, &rollapptypes.QueryGetStateInfoRequest{RollappId: rollapId, Finalized: true})
 
 	if err != nil {
 		st, ok := status.FromError(err)
