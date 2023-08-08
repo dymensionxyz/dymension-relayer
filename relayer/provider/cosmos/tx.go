@@ -1797,11 +1797,10 @@ EventLoop:
 		default:
 			rcvPackets = append(rcvPackets, rp)
 		}
-	}
-
-	// If there is a relayPacket, return it
-	if len(rcvPackets) > 0 || len(timeoutPackets) > 0 {
-		return rcvPackets, timeoutPackets, nil
+		// If there is a relayPacket, return it
+		if len(rcvPackets) > 0 || len(timeoutPackets) > 0 {
+			return rcvPackets, timeoutPackets, nil
+		}
 	}
 
 	return nil, nil, fmt.Errorf("no packet data found")
