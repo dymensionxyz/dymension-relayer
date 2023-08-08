@@ -15,6 +15,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const (
+	maxUnrelayedSequences = 10
+)
+
 // UnrelayedSequences returns the unrelayed sequence numbers between two chains
 func unrelayedSequences(ctx context.Context,
 	src *Chain, srcChannelId, srcPortId string, srch int64,
@@ -504,7 +508,7 @@ func AddMessagesForSequences(
 	srcChanID, srcPortID, dstChanID, dstPortID string,
 	order chantypes.Order,
 ) error {
-	for _, seq := range sequences {
+	for idx, seq := range sequences {
 		recvMsg, timeoutMsg, err := src.ChainProvider.RelayPacketFromSequence(
 			ctx,
 			src.ChainProvider, dst.ChainProvider,
@@ -536,6 +540,16 @@ func AddMessagesForSequences(
 
 		if timeoutMsg != nil {
 			*srcMsgs = append(*srcMsgs, timeoutMsg)
+		}
+		src.log.Info("Added packet to relay message list", zap.Uint64("sequence", seq), zap.String("src_chain_id", src.ChainID()))
+
+		// A hack to add batching to queue sequences.
+		// This is done in order to prevent a situation where 1000's of
+		// packets are piled up in a queue and every failure with
+		// adding a packet to the queue starts the process from the scratch.
+		// It assumes relayer restarts upon exit (in order to relay the next batch)
+		if idx == maxUnrelayedSequences {
+			return nil
 		}
 	}
 
