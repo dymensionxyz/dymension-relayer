@@ -61,7 +61,7 @@ func NewCosmosChainProcessor(log *zap.Logger, provider *cosmos.CosmosProvider) *
 }
 
 const (
-	queryTimeout                = 5 * time.Second
+	queryTimeout                = 30 * time.Second
 	blockResultsQueryTimeout    = 2 * time.Minute
 	latestHeightQueryRetryDelay = 1 * time.Second
 	latestHeightQueryRetries    = 5
@@ -329,7 +329,7 @@ func (ccp *CosmosChainProcessor) queryCycle(ctx context.Context, persistence *qu
 
 		ibcHeaderCache[heightUint64] = latestHeader
 		ppChanged = true
-
+		ccp.log.Info("Processing IBC messages for block", zap.Uint64("height", heightUint64))
 		for _, tx := range blockRes.TxsResults {
 			if tx.Code != 0 {
 				// tx was not successful
