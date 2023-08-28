@@ -640,7 +640,7 @@ func (cc *CosmosProvider) QueryConnectionChannels(ctx context.Context, height in
 	ctxWithHeight := lens.SetHeightOnContext(ctx, int64(height))
 	chans, err := qc.ConnectionChannels(ctxWithHeight, &chantypes.QueryConnectionChannelsRequest{
 		Connection: connectionid,
-		Pagination: DefaultPageRequest(),
+		Pagination: &querytypes.PageRequest{Limit: 1000000},
 	})
 	if err != nil {
 		return nil, err
