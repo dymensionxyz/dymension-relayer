@@ -31,6 +31,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const PaginationDelay = 10 * time.Millisecond
+
 var _ provider.QueryProvider = &CosmosProvider{}
 
 // QueryTx takes a transaction hash and returns the transaction
@@ -122,25 +124,28 @@ func (cc *CosmosProvider) QueryBalance(ctx context.Context, keyName string) (sdk
 // QueryBalanceWithAddress returns the amount of coins in the relayer account with address as input
 func (cc *CosmosProvider) QueryBalanceWithAddress(ctx context.Context, address string) (sdk.Coins, error) {
 	qc := bankTypes.NewQueryClient(cc)
-	total := []sdk.Coin{}
-	pagination := DefaultPageRequest()
+	p := DefaultPageRequest()
+	coins := sdk.Coins{}
 
 	for {
 		res, err := qc.AllBalances(ctx, &bankTypes.QueryAllBalancesRequest{
 			Address:    address,
-			Pagination: pagination,
+			Pagination: p,
 		})
 		if err != nil {
 			return nil, err
 		}
-		total = append(total, res.Balances...)
-		if len(res.Pagination.NextKey) == 0 {
+
+		coins = append(coins, res.Balances...)
+		next := res.GetPagination().GetNextKey()
+		if len(next) == 0 {
 			break
 		}
-		pagination = DefaultPageRequest()
-		pagination.Key = res.Pagination.NextKey
+
+		time.Sleep(PaginationDelay)
+		p.Key = next
 	}
-	return total, nil
+	return coins, nil
 }
 
 // QueryUnbondingPeriod returns the unbonding period of the chain
@@ -407,24 +412,27 @@ func (cc *CosmosProvider) QueryConsensusState(ctx context.Context, height int64)
 // QueryClients queries all the clients!
 func (cc *CosmosProvider) QueryClients(ctx context.Context) (clienttypes.IdentifiedClientStates, error) {
 	qc := clienttypes.NewQueryClient(cc)
-	total := []clienttypes.IdentifiedClientState{}
-	pagination := DefaultPageRequest()
+	p := DefaultPageRequest()
+	clients := []clienttypes.IdentifiedClientState{}
 
 	for {
 		res, err := qc.ClientStates(ctx, &clienttypes.QueryClientStatesRequest{
-			Pagination: pagination,
+			Pagination: p,
 		})
 		if err != nil {
 			return nil, err
 		}
-		total = append(total, res.ClientStates...)
-		if len(res.Pagination.NextKey) == 0 {
+
+		clients = append(clients, res.ClientStates...)
+		next := res.GetPagination().GetNextKey()
+		if len(next) == 0 {
 			break
 		}
-		pagination = DefaultPageRequest()
-		pagination.Key = res.Pagination.NextKey
+
+		time.Sleep(PaginationDelay)
+		p.Key = next
 	}
-	return total, nil
+	return clients, nil
 }
 
 // QueryConnection returns the remote end of a given connection
@@ -480,48 +488,53 @@ func (cc *CosmosProvider) queryConnectionABCI(ctx context.Context, height int64,
 }
 
 // QueryConnections gets any connections on a chain
-func (cc *CosmosProvider) QueryConnections(ctx context.Context) (conns []*conntypes.IdentifiedConnection, err error) {
+func (cc *CosmosProvider) QueryConnections(ctx context.Context) ([]*conntypes.IdentifiedConnection, error) {
 	qc := conntypes.NewQueryClient(cc)
-	total := []*conntypes.IdentifiedConnection{}
-	pagination := DefaultPageRequest()
+	p := DefaultPageRequest()
+	conns := []*conntypes.IdentifiedConnection{}
 
 	for {
 		res, err := qc.Connections(ctx, &conntypes.QueryConnectionsRequest{
-			Pagination: pagination,
+			Pagination: p,
 		})
-		if err != nil {
+		if err != nil || res == nil {
 			return nil, err
 		}
-		total = append(total, res.Connections...)
-		if len(res.Pagination.NextKey) == 0 {
+
+		conns = append(conns, res.Connections...)
+		next := res.GetPagination().GetNextKey()
+		if len(next) == 0 {
 			break
 		}
-		pagination = DefaultPageRequest()
-		pagination.Key = res.Pagination.NextKey
+
+		time.Sleep(PaginationDelay)
+		p.Key = next
 	}
-	return total, nil
+	return conns, nil
 }
 
 // QueryConnectionsUsingClient gets any connections that exist between chain and counterparty
 func (cc *CosmosProvider) QueryConnectionsUsingClient(ctx context.Context, height int64, clientid string) ([]*conntypes.IdentifiedConnection, error) {
 	qc := conntypes.NewQueryClient(cc)
+	p := DefaultPageRequest()
 	ctxWithHeight := lens.SetHeightOnContext(ctx, int64(height))
 	total := []*conntypes.IdentifiedConnection{}
-	pagination := DefaultPageRequest()
 
 	for {
 		res, err := qc.Connections(ctxWithHeight, &conntypes.QueryConnectionsRequest{
-			Pagination: pagination,
+			Pagination: p,
 		})
 		if err != nil {
 			return nil, err
 		}
 		total = append(total, res.Connections...)
-		if len(res.Pagination.NextKey) == 0 {
+		next := res.GetPagination().GetNextKey()
+		if len(next) == 0 {
 			break
 		}
-		pagination = DefaultPageRequest()
-		pagination.Key = res.Pagination.NextKey
+
+		time.Sleep(PaginationDelay)
+		p.Key = next
 	}
 	return total, nil
 }
@@ -637,62 +650,81 @@ func (cc *CosmosProvider) QueryChannelClient(ctx context.Context, height int64, 
 // QueryConnectionChannels queries the channels associated with a connection
 func (cc *CosmosProvider) QueryConnectionChannels(ctx context.Context, height int64, connectionid string) ([]*chantypes.IdentifiedChannel, error) {
 	qc := chantypes.NewQueryClient(cc)
+	p := DefaultPageRequest()
+	channels := []*chantypes.IdentifiedChannel{}
 	ctxWithHeight := lens.SetHeightOnContext(ctx, int64(height))
-	chans, err := qc.ConnectionChannels(ctxWithHeight, &chantypes.QueryConnectionChannelsRequest{
-		Connection: connectionid,
-		Pagination: &querytypes.PageRequest{Limit: 1000000},
-	})
-	if err != nil {
-		return nil, err
+
+	for {
+		res, err := qc.ConnectionChannels(ctxWithHeight, &chantypes.QueryConnectionChannelsRequest{
+			Connection: connectionid,
+			Pagination: p,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		channels = append(channels, res.Channels...)
+		next := res.GetPagination().GetNextKey()
+		if len(next) == 0 {
+			break
+		}
+
+		time.Sleep(PaginationDelay)
+		p.Key = next
 	}
-	return chans.Channels, nil
+	return channels, nil
 }
 
 // QueryChannels returns all the channels that are registered on a chain
 func (cc *CosmosProvider) QueryChannels(ctx context.Context) ([]*chantypes.IdentifiedChannel, error) {
 	qc := chantypes.NewQueryClient(cc)
-	total := []*chantypes.IdentifiedChannel{}
-	pagination := DefaultPageRequest()
+	p := DefaultPageRequest()
+	chans := []*chantypes.IdentifiedChannel{}
 
 	for {
 		res, err := qc.Channels(ctx, &chantypes.QueryChannelsRequest{
-			Pagination: pagination,
+			Pagination: p,
 		})
 		if err != nil {
 			return nil, err
 		}
-		total = append(total, res.Channels...)
-		if len(res.Pagination.NextKey) == 0 {
+
+		chans = append(chans, res.Channels...)
+		next := res.GetPagination().GetNextKey()
+		if len(next) == 0 {
 			break
 		}
-		pagination = DefaultPageRequest()
-		pagination.Key = res.Pagination.NextKey
+
+		time.Sleep(PaginationDelay)
+		p.Key = next
 	}
-	return total, nil
+	return chans, nil
 }
 
 // QueryPacketCommitments returns an array of packet commitments
 func (cc *CosmosProvider) QueryPacketCommitments(ctx context.Context, height uint64, channelid, portid string) (commitments []*chantypes.PacketState, err error) {
 	qc := chantypes.NewQueryClient(cc)
 	ctxWithHeight := lens.SetHeightOnContext(ctx, int64(height))
+	p := DefaultPageRequest()
 	total := []*chantypes.PacketState{}
-	pagination := DefaultPageRequest()
 
 	for {
 		res, err := qc.PacketCommitments(ctxWithHeight, &chantypes.QueryPacketCommitmentsRequest{
 			PortId:     portid,
 			ChannelId:  channelid,
-			Pagination: pagination,
+			Pagination: p,
 		})
 		if err != nil {
 			return nil, err
 		}
 		total = append(total, res.Commitments...)
-		if len(res.Pagination.NextKey) == 0 {
+		next := res.GetPagination().GetNextKey()
+		if len(next) == 0 {
 			break
 		}
-		pagination = DefaultPageRequest()
-		pagination.Key = res.Pagination.NextKey
+
+		time.Sleep(PaginationDelay)
+		p.Key = next
 	}
 	return total, nil
 }
@@ -701,32 +733,32 @@ func (cc *CosmosProvider) QueryPacketCommitments(ctx context.Context, height uin
 func (cc *CosmosProvider) QueryPacketAcknowledgements(ctx context.Context, height uint64, channelid, portid string, onlyLatest bool) (acknowledgements []*chantypes.PacketState, totalAcks uint64, err error) {
 	qc := chantypes.NewQueryClient(cc)
 	ctxWithHeight := lens.SetHeightOnContext(ctx, int64(height))
+	p := DefaultPageRequest()
+	p.Reverse = true
+	p.CountTotal = true
 	total := []*chantypes.PacketState{}
-	pagination := DefaultPageRequest()
-	pagination.Reverse = true
 
 	for {
 		res, err := qc.PacketAcknowledgements(ctxWithHeight, &chantypes.QueryPacketAcknowledgementsRequest{
 			PortId:     portid,
 			ChannelId:  channelid,
-			Pagination: pagination,
+			Pagination: p,
 		})
 		if err != nil {
 			return nil, 0, err
 		}
+		total = append(total, res.Acknowledgements...)
+
 		if totalAcks == 0 {
 			totalAcks = res.Pagination.Total
 		}
-		total = append(total, res.Acknowledgements...)
-		if onlyLatest {
+		next := res.GetPagination().GetNextKey()
+		if len(next) == 0 || onlyLatest {
 			break
 		}
-		if len(res.Pagination.NextKey) == 0 {
-			break
-		}
-		pagination = DefaultPageRequest()
-		pagination.Key = res.Pagination.NextKey
-		pagination.Reverse = true
+
+		time.Sleep(PaginationDelay)
+		p.Key = next
 	}
 	return total, totalAcks, nil
 }
@@ -944,24 +976,27 @@ func (cc *CosmosProvider) QueryDenomTrace(ctx context.Context, denom string) (*t
 func (cc *CosmosProvider) QueryDenomTraces(ctx context.Context, offset, limit uint64, height int64) ([]transfertypes.DenomTrace, error) {
 	qc := transfertypes.NewQueryClient(cc)
 	ctxWithHeight := lens.SetHeightOnContext(ctx, int64(height))
-	total := []transfertypes.DenomTrace{}
-	pagination := DefaultPageRequest()
-
+	p := DefaultPageRequest()
+	transfers := []transfertypes.DenomTrace{}
 	for {
 		res, err := qc.DenomTraces(ctxWithHeight, &transfertypes.QueryDenomTracesRequest{
-			Pagination: pagination,
+			Pagination: p,
 		})
-		if err != nil {
+
+		if err != nil || res == nil {
 			return nil, err
 		}
-		total = append(total, res.DenomTraces...)
-		if len(res.Pagination.NextKey) == 0 {
+
+		transfers = append(transfers, res.DenomTraces...)
+		next := res.GetPagination().GetNextKey()
+		if len(next) == 0 {
 			break
 		}
-		pagination = DefaultPageRequest()
-		pagination.Key = res.Pagination.NextKey
+
+		time.Sleep(PaginationDelay)
+		p.Key = next
 	}
-	return total, nil
+	return transfers, nil
 }
 
 func (cc *CosmosProvider) QueryStakingParams(ctx context.Context) (*stakingtypes.Params, error) {
@@ -977,7 +1012,7 @@ func DefaultPageRequest() *querytypes.PageRequest {
 		Key:        []byte(""),
 		Offset:     0,
 		Limit:      1000,
-		CountTotal: true,
+		CountTotal: false,
 	}
 }
 
