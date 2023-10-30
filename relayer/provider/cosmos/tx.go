@@ -1598,7 +1598,11 @@ func (cc *CosmosProvider) RelayPacketFromSequence(
 	case len(txs) == 0:
 		return nil, nil, fmt.Errorf("no transactions returned with query")
 	case len(txs) > 1:
-		return nil, nil, fmt.Errorf("more than one transaction returned with query")
+		// Hack as seems like there is a bug where events which shouldn't have been included are included.
+		// We currently simply take the first tx, so not to break the relayer from continuing. 
+		// If any of the txs are not correct, the relayer will error out later on but at least it will continue.
+		txs = txs[:1]
+		// return nil, nil, fmt.Errorf("more than one transaction returned with query")
 	}
 	if txs[0].Height > int64(srch) {
 		return nil, nil, nil
@@ -1686,7 +1690,8 @@ func (cc *CosmosProvider) AcknowledgementFromSequence(ctx context.Context,
 
 func rcvPacketQuery(channelID string, seq int) []string {
 	return []string{fmt.Sprintf("%s.packet_src_channel='%s'", spTag, channelID),
-		fmt.Sprintf("%s.packet_sequence='%d'", spTag, seq)}
+		fmt.Sprintf("%s.packet_sequence='%d'", spTag, seq),
+	}
 }
 
 func ackPacketQuery(channelID string, seq int) []string {
