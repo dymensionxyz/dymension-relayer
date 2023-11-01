@@ -3,6 +3,7 @@ package relayer
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/avast/retry-go/v4"
@@ -508,6 +509,13 @@ func AddMessagesForSequences(
 	srcChanID, srcPortID, dstChanID, dstPortID string,
 	order chantypes.Order,
 ) error {
+	src.log.Info("Adding messages for sequences", zap.String("src_chain_id", src.ChainID()))
+	// hack: Iterate in reverse order to get latest packets first. This breaks compatibility with ordered channels, but it's a hack.
+	// To make sure first packets get priorities as a lot may be stuck in queue.
+	// Order sequences where the heights sequence is first in the list
+	sort.Slice(sequences, func(i, j int) bool {
+		return sequences[i] > sequences[j]
+	})
 	for idx, seq := range sequences {
 		recvMsg, timeoutMsg, err := src.ChainProvider.RelayPacketFromSequence(
 			ctx,
@@ -530,18 +538,18 @@ func AddMessagesForSequences(
 				zap.String("channel_order", order.String()),
 				zap.Error(err),
 			)
-			return err
+			continue
 		}
 
 		// Depending on the type of message to be relayed, we need to send to different chains
 		if recvMsg != nil {
-			*dstMsgs = append(*dstMsgs, recvMsg)
+			*dstMsgs = append([]provider.RelayerMessage{recvMsg}, *dstMsgs...)
 		}
 
 		if timeoutMsg != nil {
-			*srcMsgs = append(*srcMsgs, timeoutMsg)
+			*srcMsgs = append([]provider.RelayerMessage{timeoutMsg}, *srcMsgs...)
 		}
-		src.log.Info("Added packet to relay message list", zap.Uint64("sequence", seq), zap.String("src_chain_id", src.ChainID()))
+		src.log.Info("Added packet to relay message list", zap.Uint64("sequence", seq), zap.String("src_chain_id", src.ChainID()), zap.Uint64("height", uint64(srch)))
 
 		// A hack to add batching to queue sequences.
 		// This is done in order to prevent a situation where 1000's of

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -71,7 +72,6 @@ func (cc *CosmosProvider) QueryTxs(ctx context.Context, page, limit int, events 
 	if limit <= 0 {
 		return nil, errors.New("limit must greater than 0")
 	}
-
 	res, err := cc.RPCClient.TxSearch(ctx, strings.Join(events, " AND "), true, &page, &limit, "")
 	if err != nil {
 		return nil, err
@@ -709,6 +709,7 @@ func (cc *CosmosProvider) QueryPacketCommitments(ctx context.Context, height uin
 	total := []*chantypes.PacketState{}
 
 	for {
+		log.Printf("Querying packet commitments for channel: %s, page: %s, height: %d", channelid, p.Key, height)
 		res, err := qc.PacketCommitments(ctxWithHeight, &chantypes.QueryPacketCommitmentsRequest{
 			PortId:     portid,
 			ChannelId:  channelid,
@@ -717,6 +718,7 @@ func (cc *CosmosProvider) QueryPacketCommitments(ctx context.Context, height uin
 		if err != nil {
 			return nil, err
 		}
+		log.Printf("Found %d packet commitments for channel %s. Adding them to the total.", len(res.Commitments), channelid)
 		total = append(total, res.Commitments...)
 		next := res.GetPagination().GetNextKey()
 		if len(next) == 0 {
@@ -726,6 +728,7 @@ func (cc *CosmosProvider) QueryPacketCommitments(ctx context.Context, height uin
 		time.Sleep(PaginationDelay)
 		p.Key = next
 	}
+	log.Printf("Found %d packet commitments for channel %s", len(total), channelid)
 	return total, nil
 }
 
