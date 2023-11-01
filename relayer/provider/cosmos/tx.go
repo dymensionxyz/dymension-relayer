@@ -1991,8 +1991,9 @@ func (cc *CosmosProvider) InjectTrustedFields(ctx context.Context, header ibcexp
 	// place where we need to fix the upstream query proof issue?
 	var trustedHeader ibcexported.Header
 	if err := retry.Do(func() error {
-		trustedHeader, err = cc.GetLightSignedHeaderAtHeight(ctx, int64(latestTrustedHeight.RevisionHeight+1))
+		trustedHeader, err = cc.GetLightSignedHeaderAtHeight(ctx, int64(latestTrustedHeight.RevisionHeight))
 		if err != nil {
+			fmt.Printf("Error: %v, while getting light signed header at height: %d from source chain\n", err, int64(latestTrustedHeight.RevisionHeight))
 			return err
 		}
 		return err
